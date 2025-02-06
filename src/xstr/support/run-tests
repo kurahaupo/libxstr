@@ -1,0 +1,137 @@
+#!/bin/sh
+
+cleanup=onfail
+
+while :
+do
+    case $1 in
+        --clean-on-pass|\
+        --keep-on-fail)
+            cleanup=onfail ;;
+        --cleanup|\
+        --dont-keep|\
+        --no-keep)
+            cleanup=true ;;
+        --dont-cleanup|\
+        --keep|\
+        --no-cleanup)
+            cleanup=false ;;
+        -*) printf 'Bad option %s\n' >&2 "$1" ; exit 64 ;;
+        *) break
+    esac
+    shift
+done
+
+export RUNDIR=${TMPDIR:=$XDG_RUNTIME_DIR/tmp}/xstr-run-$(date +%F_%T)-$$/
+
+SUPDIR=${0%"${0##*/}"}
+
+PATH=${SUPDIR%/}:$PATH
+
+export RESULTS="$RUNDIR"results/
+
+mkdir -p "$RUNDIR" "$RESULTS"
+
+# Don't read anything from the keyboard
+exec < /dev/null 3>&2
+
+overall=pass
+
+for ff in t/*
+do
+                f=${ff##*/}
+    gg=${ff%.*} g=${gg##*/}
+
+    result=$RESULTS${f##*/}
+
+    case ${f#"$g"} in
+      .bash) bash "$ff" ;;
+      .pl)  perl "$ff" ;;
+      .py)  python3 "$ff" ;;
+      .run) "$ff" ;;
+      .sh)  sh "$ff" ;;
+      *)
+            rm -f "$result.std"*~
+            continue ;;
+    # *)    printf 'Skipping %s\n' "$ff"
+    esac > $result.stdout~ 2> $result.stderr~
+    e=$?
+    echo "$e" > $result.exitcode
+
+    for o in stdout stderr
+    do
+        mv -f "$result.$o~" "$result.$o"
+    done
+
+    status=pass
+    diff_stdout=false
+    diff_stderr=false
+
+    {
+        for o in stdout stderr
+        do
+            [ -r "$gg.$o" ] || continue
+            cmp "$gg.$o" "$result.$o" && continue
+
+            eval diff_$o=false
+            status=fail
+            overall=fail
+            echo "bad $o"
+        done
+
+        if [ -r "$gg.exitcode" ]
+        then
+            # Empty exitcode file means ignore the exit code
+            [ -s "$gg.exitcode" ] &&
+              ! grep -qxF "$e" "$gg.exitcode"
+        else
+            [ 0 != "$e" ]
+        fi && {
+            status=fail
+            overall=fail
+            printf 'wrong '
+        }
+        echo "exit status $e"
+    } > "$result.reason"
+
+    vreason=$( tr '\n' ';' < "$result.reason" )
+    vreason=${vreason%?}
+
+    case $status in
+      pass)
+        printf '\033[m\033[K%-31s \033[34;1m%31s\033[m \033[32;1mPASS\033[m\n' \
+                "$g" "$vreason"
+        ;;
+
+      fail)
+        printf '\033[m\033[K%-31s \033[34;1m%31s\033[m \033[31;1mFAIL\033[m\n' \
+                "$g" "$vreason"
+        for o in stdout stderr
+        do
+            fo=$result.$o
+            [ -s "$fo" ] || {
+                [ -f "$fo" ] &&
+                    rm -f "$fo"
+                continue
+            }
+            printf '\033[33m%s\033[m\n' "$o"
+            sed 's/^/	/' < "$fo"
+            printf '\n'
+        done
+        ;;
+    esac
+done
+
+if
+    case $cleanup in
+        true)   true ;;
+        false)  false ;;
+        onfail) [ "$overall" = pass ] ;;
+    esac
+then
+    rm -rf "$RUNDIR"
+else
+    printf 'Individual test results saved in %s\n' "$RUNDIR"
+fi
+
+[ "$overall" = pass ]
