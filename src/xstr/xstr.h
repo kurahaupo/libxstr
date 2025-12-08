@@ -13,10 +13,9 @@
  */
 
 typedef enum xstr_state_e {
-    xstr_null    = 0, /* Zero filled, never initialized */
-    xstr_valid   = 1, /* Correct value */
-    xstr_stale   = 2, /* Value has been given away */
-    xstr_max     = 7, /* any other value (3..7) is truly "invalid" */
+    xstr_null    = 0, /* Either implicitly 0-fill initialized, or
+                       * already given away */
+    xstr_valid   = 5, /* Correct value; a random 3-bit number other than 0 */
 } xstr_state_t;
 
 typedef struct xstring {
@@ -50,7 +49,7 @@ typedef struct offered_string {
 } XS;
 
 typedef struct xbuffer {
-    S s;    /* MUST be first so that up-casting works; offsetof==0 */
+    S s;    /* MUST be first so that (B*)&(b->s) == b */
     size_t len;
 } B;
 
@@ -85,30 +84,34 @@ xstr_to_xbuf(S *s)
 }
 
 static inline void
-xstr_finish(S *s) {
+xstr_finish_or_ignore(S *s, _Bool ignoring) {
   # ifdef XSTR_DEBUG
-    xstr_print_state("Finish", s);
+    xstr_print_state(ignoring ? "Ignore" : "Finish", s);
   # endif
-    if ( s->signature != xstr_valid ) {
+    if ( s->signature == xstr_null ) {
       # ifdef XSTR_DEBUG
-        fprintf(stderr, "XSTR: ... finished; already invalid\n");
+        fprintf(stderr, "XSTR: ... %s; already null or state\n",
+                ignoring ? "ignored" : "finished");
       # endif
-        return;
     }
-  # ifdef XSTR_DEBUG
-    fprintf(stderr, "XSTR: ... setting base=NULL, size=0, sig=stale\n");
-  # endif
-    if ( s->data_alloc ) {
+    else {
+        xstr_assert_valid(s);
       # ifdef XSTR_DEBUG
-        fprintf(stderr, "XSTR: alloc_data, free(base=%p)\n", s->base);
+        fprintf(stderr, "XSTR: ... setting base=NULL, size=0, sig=stale\n");
       # endif
-        free((void*) s->base);
+        if ( s->data_alloc ) {
+          # ifdef XSTR_DEBUG
+            fprintf(stderr, "XSTR: alloc_data, free(base=%p)\n", s->base);
+          # endif
+            free((void*) s->base);
+            s->data_alloc = 0;
+        }
+        s->base = NULL;
+        s->size = 0U;
+        if ( s->is_buffer )
+            xstr_to_xbuf(s)->len = 0;
+        s->signature = xstr_null;
     }
-    s->base = NULL;
-    s->size = 0U;
-    if ( s->is_buffer )
-        xstr_to_xbuf(s)->len = 0;
-    s->signature = xstr_stale;
   #ifdef XSTR_USE_ALLOC
     if ( s->self_alloc ) {
       # ifdef XSTR_DEBUG
@@ -150,6 +153,14 @@ xstr_len(S *s) {
     return s->size;
 }
 
+static inline size_t
+xstr_lenz(S *s) {
+    xstr_assert_valid(s);
+    if (s->is_buffer)
+        return xstr_to_xbuf(s)->len + 1; /* including null terminator */
+    return s->size;
+}
+
 static inline XS
 xstr_loan(S *s) {
     xstr_assert_valid(s);
@@ -184,11 +195,12 @@ xstr_borrow(XS *bs) {
     return bs->offer;
 }
 
+/* Giving and Returning are the same logic */
 static inline XS
-xstr_give(S *s) {
+xstr_give_or_return(S *s, _Bool returning) {
     xstr_assert_valid(s);
   # ifdef XSTR_DEBUG
-    xstr_print_state("Giving", s);
+    xstr_print_state(returning ? "Returning" : "Giving", s);
   # endif
     XS ret = {
         .offer = {
@@ -204,13 +216,20 @@ xstr_give(S *s) {
             .loan = s->loan,
         },
     };
-    *s = (S){ .signature = xstr_stale };
+    if (!returning) {
+        /* cleanup just enough that Finish/Ignore doesn't dealloc */
+        s->signature = xstr_null;
+        s->data_alloc = 0;
+        s->size = 0;
+        s->base = NULL;
+    }
   # ifdef XSTR_DEBUG
     xstr_print_state(" ...", &ret.offer);
-        fprintf(stderr, "XSTR: give(offer=%p, base=%p, size=%zu); nothing changed\n",
+        fprintf(stderr, "XSTR: %s(offer=%p, base=%p, size=%zu)\n",
+                returning ? "returned" : "given",
                 s, s->base, (size_t) s->size);
   # endif
-    xstr_finish(s);
+    xstr_finish_or_ignore(s);
     return ret;
 }
 
@@ -223,7 +242,7 @@ xstr_take(XS *ts) {
         fprintf(stderr, "XSTR: taking clone from loan...\n");
         xstr_print_state(" ...", s);
       # endif
-        size_t len = xstr_len(s)+1;  /* if it's a buffer, only copy the occupied part, plus room for a NUL terminator */
+        size_t len = xstr_lenz(s);  /* if it's a buffer, only copy the occupied part, plus room for a NUL terminator */
         S ret = {
             .signature = xstr_valid,
             .base = xstr__memdup(s->base, len),
@@ -249,6 +268,7 @@ xstr_take(XS *ts) {
       #ifdef XSTR_USE_ALLOC
         ret.self_alloc = 0;
       #endif
+        xstr_finish_or_ignore(s, 0)
       # ifdef XSTR_DEBUG
         fprintf(stderr, "XSTR: ...taken(offer=%p, base=%p, f=%zu)\n", ts, s->base, (size_t) s->size);
         xstr_print_state(" ...", &ret);
@@ -282,11 +302,14 @@ xstr_csw(S *s) {
 #define Loan(X)     xstr_loan(&(X))
 #define Borrow(X)   xstr_borrow(&(X))
 
-#define Give(X)     xstr_give(&(X))
+#define Give(X)     xstr_give_or_return(&(X), 0)
 #define Take(X)     xstr_take(&(X))
 
-#define Finish(X)   xstr_finish(&(X))
+#define Finish(X)   xstr_finish_or_ignore(&(X), 0)
 #define S2B(X)      xstr_to_xbuf(&(X))
+
+#define Return(X)   return xstr_give_or_return(&(X), 1)
+#define Ignore(X)   xstr_finish_or_ignore(&(X)->offer, 1)
 
 static inline B
 xbuf_new( size_t cap ) {
