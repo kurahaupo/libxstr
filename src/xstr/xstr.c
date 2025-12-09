@@ -18,20 +18,24 @@
 #include "xstr.h"
 
 _Noreturn void
-xstr_panic(char const *fmt, ...) {
+xstr_panic(CALLEE char const *fmt, ...) {
     va_list v;
+  #if HIDE_CALLER
+    fprintf(stderr, "PANIC XSTR: ");
+  #else
+    fprintf(stderr, "PANIC %s#%u XSTR: ", file, lineno);
+  #endif
     va_start(v, fmt);
-    fputs("XSTR PANIC: ", stderr);
     vfprintf(stderr, fmt, v);
     va_end(v);
     exit(88);
 }
 
 void *
-xstr__memdup( const void *p, size_t l ) {
+xstr__memdup(CALLEE const void *p, size_t l ) {
     void *r = malloc(l);
     if (!r) {
-        xstr_panic("xstr_memdup: malloc(%zu) failed; %m", l);
+        xstr_panic(__FILE__, __LINE__, "xstr_memdup: malloc(%zu) failed; %m", l);
         return NULL;
     }
     memcpy(r, p, l);
@@ -39,24 +43,23 @@ xstr__memdup( const void *p, size_t l ) {
 }
 
 char const *
-xstr_state_name(xstr_state_t st) {
+xstr_state_name(CALLEE xstr_state_t st) {
     static const char *sig_names[8] = {
         [xstr_null]  = "null",
         [xstr_valid] = "valid",
-        [xstr_stale] = "stale",
     };
-    if (st < 0 || st > xstr_max)
+    if (st < 0 || st >= 8)
         return "invalid";
     return sig_names[st] ?: "invalid";
 }
 
 #ifdef XSTR_DEBUG
 void
-xstr_print_state(char const *fn, S *s) {
+xstr_print_state(CALLEE char const *fn, S *s) {
     fprintf(stderr, "XSTR: %s(s=%p, ", fn, s);
     fprintf(stderr, "base=%p", s->base);
     if (s->base) {
-        size_t l = xstr_len(s);
+        size_t l = xstr_len(OUTER_CALL s);
         static int SnapLen = 128;
         if (l>SnapLen)
             fprintf(stderr, "[\"%.*s…\"]", (int) SnapLen, CS(*s));
@@ -64,7 +67,7 @@ xstr_print_state(char const *fn, S *s) {
             fprintf(stderr, "[\"%.*s\"]", (int) l, CS(*s));
     }
     fprintf(stderr, ", size=%zu", (size_t) s->size);
-    fprintf(stderr, ", state=%s", xstr_state_name(s->signature));
+    fprintf(stderr, ", state=%s", xstr_state_name(OUTER_CALL s->signature));
     fprintf(stderr, "%s%s%s",
                         s->writable   ? ", writable"    : ", readonly",
                         s->loan       ? ", +loan"       : "",

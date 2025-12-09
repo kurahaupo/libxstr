@@ -16,6 +16,7 @@ typedef enum xstr_state_e {
     xstr_null    = 0, /* Either implicitly 0-fill initialized, or
                        * already given away */
     xstr_valid   = 5, /* Correct value; a random 3-bit number other than 0 */
+    xstr_max     = 7, /* fits in 3 bits */
 } xstr_state_t;
 
 typedef struct xstring {
@@ -59,34 +60,46 @@ typedef struct offered_buffer {
 
 /************************************************************************/
 
-extern void * xstr__memdup( const void *p, size_t l );
-extern _Noreturn void xstr_panic(char const *fmt, ...);
-extern char const * xstr_state_name(xstr_state_t st);
+#if HIDE_CALLER
+# define CALLEE
+# define THIS_CALL
+# define OUTER_CALL
+#else
+# define CALLEE char const *file, unsigned lineno,
+# define THIS_CALL __FILE__, __LINE__,
+# define OUTER_CALL file, lineno,
+# ifndef HIDE_CALLER
+#  define HIDE_CALLER 0
+# endif
+#endif
+
+extern void * xstr__memdup(CALLEE const void *p, size_t l );
+extern _Noreturn void xstr_panic(CALLEE char const *fmt, ...);
 #ifdef XSTR_DEBUG
-extern void xstr_print_state(char const *fn, S *s);
+extern void xstr_print_state(CALLEE char const *fn, S *s);
 #endif
 
 /************************************************************************/
 
 #define xstr_assert_valid(s) \
     if ((s)->signature == xstr_valid) {} else \
-        xstr_panic("%s: XS %p not valid\n", __FUNCTION__, (s))
+        xstr_panic(THIS_CALL "%p not valid\n", (s))
 
 #define xstr_assert_validx(xs) \
     xstr_assert_valid(&(xs)->offer)
 
 static inline B *
-xstr_to_xbuf(S *s)
+xstr_to_xbuf(CALLEE S *s)
 {
     if (!s->is_buffer)
-        xstr_panic("not a buffer");
+        xstr_panic(THIS_CALL "not a buffer");
     return (B *)s;
 }
 
 static inline void
-xstr_finish_or_ignore(S *s, _Bool ignoring) {
+xstr_finish_or_ignore(CALLEE S *s, _Bool ignoring) {
   # ifdef XSTR_DEBUG
-    xstr_print_state(ignoring ? "Ignore" : "Finish", s);
+    xstr_print_state(OUTER_CALL ignoring ? "Ignore" : "Finish", s);
   # endif
     if ( s->signature == xstr_null ) {
       # ifdef XSTR_DEBUG
@@ -109,7 +122,7 @@ xstr_finish_or_ignore(S *s, _Bool ignoring) {
         s->base = NULL;
         s->size = 0U;
         if ( s->is_buffer )
-            xstr_to_xbuf(s)->len = 0;
+            xstr_to_xbuf(OUTER_CALL s)->len = 0;
         s->signature = xstr_null;
     }
   #ifdef XSTR_USE_ALLOC
@@ -124,7 +137,7 @@ xstr_finish_or_ignore(S *s, _Bool ignoring) {
 
 /* literal xstring */
 static inline S
-xstr_new(char const *s, size_t l, _Bool writable) {
+xstr_new(CALLEE char const *s, size_t l, _Bool writable) {
     return (S){
                 .base = (void *) s,
                 .size = l,
@@ -134,35 +147,35 @@ xstr_new(char const *s, size_t l, _Bool writable) {
 }
 
 static inline char const *
-xstr_cstr(S *s) {
+xstr_cstr(CALLEE S *s) {
     xstr_assert_valid(s);
     return s->base;
 }
 
 static inline size_t
-xstr_size(S *s) {
+xstr_size(CALLEE S *s) {
     xstr_assert_valid(s);
     return s->size;
 }
 
 static inline size_t
-xstr_len(S *s) {
+xstr_len(CALLEE S *s) {
     xstr_assert_valid(s);
     if (s->is_buffer)
-        return xstr_to_xbuf(s)->len;
+        return xstr_to_xbuf(OUTER_CALL s)->len;
     return s->size;
 }
 
 static inline size_t
-xstr_lenz(S *s) {
+xstr_lenz(CALLEE S *s) {
     xstr_assert_valid(s);
     if (s->is_buffer)
-        return xstr_to_xbuf(s)->len + 1; /* including null terminator */
+        return xstr_to_xbuf(OUTER_CALL s)->len + 1; /* including null terminator */
     return s->size;
 }
 
 static inline XS
-xstr_loan(S *s) {
+xstr_loan(CALLEE S *s) {
     xstr_assert_valid(s);
     XS ret = {
         .offer = {
@@ -179,17 +192,17 @@ xstr_loan(S *s) {
         }
     };
   # ifdef XSTR_DEBUG
-    xstr_print_state("Loan", s);
-    xstr_print_state(" ...", &ret.offer);
+    xstr_print_state(OUTER_CALL "Loan", s);
+    xstr_print_state(OUTER_CALL " ...", &ret.offer);
   # endif
     return ret;
 }
 
 static inline S
-xstr_borrow(XS *bs) {
+xstr_borrow(CALLEE XS *bs) {
     xstr_assert_validx(bs);
   # ifdef XSTR_DEBUG
-    xstr_print_state("Borrow", &bs->offer);
+    xstr_print_state(OUTER_CALL "Borrow", &bs->offer);
     fprintf(stderr, "XSTR: ... no change\n");
   # endif
     return bs->offer;
@@ -197,10 +210,10 @@ xstr_borrow(XS *bs) {
 
 /* Giving and Returning are the same logic */
 static inline XS
-xstr_give_or_return(S *s, _Bool returning) {
+xstr_give_or_return(CALLEE S *s, _Bool returning) {
     xstr_assert_valid(s);
   # ifdef XSTR_DEBUG
-    xstr_print_state(returning ? "Returning" : "Giving", s);
+    xstr_print_state(OUTER_CALL returning ? "Returning" : "Giving", s);
   # endif
     XS ret = {
         .offer = {
@@ -224,28 +237,28 @@ xstr_give_or_return(S *s, _Bool returning) {
         s->base = NULL;
     }
   # ifdef XSTR_DEBUG
-    xstr_print_state(" ...", &ret.offer);
-        fprintf(stderr, "XSTR: %s(offer=%p, base=%p, size=%zu)\n",
-                returning ? "returned" : "given",
-                s, s->base, (size_t) s->size);
+    xstr_print_state(OUTER_CALL " ...", &ret.offer);
+    fprintf(stderr, "XSTR: %s(offer=%p, base=%p, size=%zu)\n",
+            returning ? "returned" : "given",
+            s, s->base, (size_t) s->size);
   # endif
-    xstr_finish_or_ignore(s);
+    xstr_finish_or_ignore(OUTER_CALL s, 0);
     return ret;
 }
 
 static inline S
-xstr_take(XS *ts) {
+xstr_take(CALLEE XS *ts) {
     xstr_assert_validx(ts);
     S *s = &ts->offer;
     if ( s->loan ) {
       # ifdef XSTR_DEBUG
         fprintf(stderr, "XSTR: taking clone from loan...\n");
-        xstr_print_state(" ...", s);
+        xstr_print_state(OUTER_CALL " ...", s);
       # endif
-        size_t len = xstr_lenz(s);  /* if it's a buffer, only copy the occupied part, plus room for a NUL terminator */
+        size_t len = xstr_lenz(OUTER_CALL s);  /* if it's a buffer, only copy the occupied part, plus room for a NUL terminator */
         S ret = {
             .signature = xstr_valid,
-            .base = xstr__memdup(s->base, len),
+            .base = xstr__memdup(OUTER_CALL s->base, len),
             .size = len,
             .data_alloc = 1,
             .writable = 1,
@@ -256,7 +269,7 @@ xstr_take(XS *ts) {
         };
       # ifdef XSTR_DEBUG
         fprintf(stderr, "XSTR: ...cloned(offer=%p, base=%p, f=%zu)\n", ts, s->base, (size_t) s->size);
-        xstr_print_state(" ...", &ret);
+        xstr_print_state(OUTER_CALL " ...", &ret);
       # endif
         return ret;
     }
@@ -268,48 +281,48 @@ xstr_take(XS *ts) {
       #ifdef XSTR_USE_ALLOC
         ret.self_alloc = 0;
       #endif
-        xstr_finish_or_ignore(s, 0)
+        xstr_finish_or_ignore(OUTER_CALL s, 0);
       # ifdef XSTR_DEBUG
         fprintf(stderr, "XSTR: ...taken(offer=%p, base=%p, f=%zu)\n", ts, s->base, (size_t) s->size);
-        xstr_print_state(" ...", &ret);
+        xstr_print_state(OUTER_CALL " ...", &ret);
       # endif
         return ret;
     }
 }
 
 static inline char const *
-xstr_cs(S *s) {
+xstr_cs(CALLEE S *s) {
     xstr_assert_valid(s);
     return s->base;
 }
 
 static inline char *
-xstr_csw(S *s) {
+xstr_csw(CALLEE S *s) {
     xstr_assert_valid(s);
     if (!s->writable)
-        xstr_panic("Must not convert unwritable to writable");
+        xstr_panic(OUTER_CALL "Must not convert unwritable to writable");
     return s->base;
 }
 
-#define LS(lit_str) xstr_new((lit_str), (sizeof (lit_str))-1, 0)
-#define AS(array,len) xstr_new((array), (len), 1)
-#define CS(X)       xstr_cs(&(X))
-#define CSW(X)      xstr_csw(&(X))
-#define CL(X)       xstr_len(&(X))
+#define LS(lit_str) xstr_new(THIS_CALL (lit_str), (sizeof (lit_str))-1, 0)
+#define AS(array,len) xstr_new(THIS_CALL (array), (len), 1)
+#define CS(X)       xstr_cs(THIS_CALL &(X))
+#define CSW(X)      xstr_csw(THIS_CALL &(X))
+#define CL(X)       xstr_len(THIS_CALL &(X))
 #define CSL(X)      CS(&(X)), CL(&(X))
 #define CSWL(X)     CSW(&(X)), CL(&(X))
 
-#define Loan(X)     xstr_loan(&(X))
-#define Borrow(X)   xstr_borrow(&(X))
+#define Loan(X)     xstr_loan(THIS_CALL &(X))
+#define Borrow(X)   xstr_borrow(THIS_CALL &(X))
 
-#define Give(X)     xstr_give_or_return(&(X), 0)
-#define Take(X)     xstr_take(&(X))
+#define Give(X)     xstr_give_or_return(THIS_CALL &(X), 0)
+#define Take(X)     xstr_take(THIS_CALL &(X))
 
-#define Finish(X)   xstr_finish_or_ignore(&(X), 0)
-#define S2B(X)      xstr_to_xbuf(&(X))
+#define Finish(X)   xstr_finish_or_ignore(THIS_CALL &(X), 0)
+#define S2B(X)      xstr_to_xbuf(THIS_CALL &(X))
 
-#define Return(X)   return xstr_give_or_return(&(X), 1)
-#define Ignore(X)   xstr_finish_or_ignore(&(X)->offer, 1)
+#define Return(X)   return xstr_give_or_return(THIS_CALL &(X), 1)
+#define Ignore(X)   xstr_finish_or_ignore(THIS_CALL &(X)->offer, 1)
 
 static inline B
 xbuf_new( size_t cap ) {

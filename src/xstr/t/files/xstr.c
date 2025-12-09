@@ -21,7 +21,7 @@
 
 #ifndef XSTR_DEBUG
 void
-xstr_print_state(char const *fn, S *s) {
+xstr_print_state(CALLEE char const *fn, S *s) {
     fprintf(stderr, "XSTR: %s(s=%p, ", fn, s);
     fprintf(stderr, "base=%p", s->base);
     if (s->base) {
@@ -35,7 +35,7 @@ xstr_print_state(char const *fn, S *s) {
             fprintf(stderr, "[\"%.*s\"]", (int) l, CS(*s));
     }
     fprintf(stderr, ", size=%zu", (size_t) s->size);
-    fprintf(stderr, ", state=%s", xstr_state_name(s->signature));
+    fprintf(stderr, ", state=%s", xstr_state_name(OUTER_CALL s->signature));
     fprintf(stderr, "%s%s%s",
                         s->writable   ? ", writable"    : ", readonly",
                         s->loan       ? ", +loan"       : "",
@@ -51,84 +51,84 @@ xstr_print_state(char const *fn, S *s) {
 /******************************************************************************/
 
 void test_func1( XS bs ) {
-    xstr_print_state("func1(param)", &bs.offer);
+    xstr_print_state(THIS_CALL "func1(param)", &bs.offer);
     S s = Take(bs);
-    xstr_print_state("func1(taken)", &s);
+    xstr_print_state(THIS_CALL "func1(taken)", &s);
     Finish(s);
-    xstr_print_state("func1(finished)", &s);
+    xstr_print_state(THIS_CALL "func1(finished)", &s);
 }
 
 void test_func2( XS bs ) {
-    xstr_print_state("func2(param)", &bs.offer);
+    xstr_print_state(THIS_CALL "func2(param)", &bs.offer);
     S s = Borrow(bs);
-    xstr_print_state("func2(borrowed)", &s);
+    xstr_print_state(THIS_CALL "func2(borrowed)", &s);
     test_func1(Loan(s));
-    xstr_print_state("func2(loaned)", &s);
+    xstr_print_state(THIS_CALL "func2(loaned)", &s);
     test_func1(Give(s));
-    xstr_print_state("func2(given)", &s);
+    xstr_print_state(THIS_CALL "func2(given)", &s);
     Finish(s);
-    xstr_print_state("func2(finished)", &s);
+    xstr_print_state(THIS_CALL "func2(finished)", &s);
 }
 
 void test_func3( XS bs ) {
-    xstr_print_state("func3(param)", &bs.offer);
+    xstr_print_state(THIS_CALL "func3(param)", &bs.offer);
     S s = Borrow(bs);
-    xstr_print_state("func3(borrowed)", &s);
+    xstr_print_state(THIS_CALL "func3(borrowed)", &s);
     Finish(s);
-    xstr_print_state("func3(finished)", &s);
+    xstr_print_state(THIS_CALL "func3(finished)", &s);
 }
 
 void test_func4() {
     S s = LS("Hello world");
-    xstr_print_state("func4(param)", &s);
+    xstr_print_state(THIS_CALL "func4(param)", &s);
     test_func3(Loan(s));
-    xstr_print_state("func4(loaned)", &s);
+    xstr_print_state(THIS_CALL "func4(loaned)", &s);
     test_func3(Give(s));
-    xstr_print_state("func4(given)", &s);
+    xstr_print_state(THIS_CALL "func4(given)", &s);
     Finish(s);
-    xstr_print_state("func4(finished)", &s);
+    xstr_print_state(THIS_CALL "func4(finished)", &s);
 }
 
 void test_func5( XS bs ) {
-    xstr_print_state("func5(param)", &bs.offer);
+    xstr_print_state(THIS_CALL "func5(param)", &bs.offer);
     S s = Take(bs);
-    xstr_print_state("func5(taken)", &s);
+    xstr_print_state(THIS_CALL "func5(taken)", &s);
     test_func3(Give(s));
-    xstr_print_state("func5(given)", &s);
+    xstr_print_state(THIS_CALL "func5(given)", &s);
     Finish(s);
-    xstr_print_state("func5(finished)", &s);
+    xstr_print_state(THIS_CALL "func5(finished)", &s);
 }
 
 void test_func6() {
     S s = LS("Hello world");
-    xstr_print_state("func6(literal)", &s);
+    xstr_print_state(THIS_CALL "func6(literal)", &s);
     test_func1(Loan(s));
-    xstr_print_state("func6(loaned)", &s);
+    xstr_print_state(THIS_CALL "func6(loaned)", &s);
     test_func1(Give(s));
-    xstr_print_state("func6(given)", &s);
+    xstr_print_state(THIS_CALL "func6(given)", &s);
     test_func1(Loan(s)); // DIE HERE
-    xstr_print_state("func6(re-loaned)", &s);
+    xstr_print_state(THIS_CALL "func6(re-loaned)", &s);
     Finish(s);
-    xstr_print_state("func6(finished)", &s);
+    xstr_print_state(THIS_CALL "func6(finished)", &s);
 }
 
 void test_func7() {
     S s = LS("Hello world");
-    xstr_print_state("func6(literal)", &s);
+    xstr_print_state(THIS_CALL "func6(literal)", &s);
     test_func1(Loan(s));
-    xstr_print_state("func6(loaned)", &s);
+    xstr_print_state(THIS_CALL "func6(loaned)", &s);
     test_func2(Loan(s));
-    xstr_print_state("func6(loaned)", &s);
+    xstr_print_state(THIS_CALL "func6(loaned)", &s);
     test_func3(Loan(s));
-    xstr_print_state("func6(loaned)", &s);
-    test_func4(Loan(s));
-    xstr_print_state("func6(loaned)", &s);
+    xstr_print_state(THIS_CALL "func6(loaned)", &s);
+//  test_func4(Loan(s));
+//  xstr_print_state(THIS_CALL "func6(loaned)", &s);
     test_func5(Loan(s));
-    xstr_print_state("func6(loaned)", &s);
+    xstr_print_state(THIS_CALL "func6(loaned)", &s);
     test_func5(Give(s));
-    xstr_print_state("func6(given)", &s);
+    xstr_print_state(THIS_CALL "func6(given)", &s);
     Finish(s);
-    xstr_print_state("func6(finished)", &s);
+    xstr_print_state(THIS_CALL "func6(finished)", &s);
 }
 
 int main() {
